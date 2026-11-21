@@ -289,6 +289,12 @@ def main():
     t_perf_50k()
     t_http()
     print()
+    # 补档自测(缺失一笔日志的推算)
+    from tests import recovery_selftest
+    rc = recovery_selftest.main()
+    if rc:
+        FAILED.append("补档自测")
+    print()
     if FAILED:
         print(f"失败 {len(FAILED)} 项: {', '.join(FAILED)}")
         sys.exit(1)

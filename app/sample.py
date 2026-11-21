@@ -20,6 +20,8 @@
 交集 {100,102,106,108,110}。
 """
 
+import json
+
 WB_ROWS_0 = [
     {"单号": "WB0001", "状态": "已签收", "件数": 3, "目的地": "上海"},
     {"单号": "WB0002", "状态": "运输中", "件数": 5, "目的地": "北京"},
@@ -78,3 +80,20 @@ def build_sample():
         "intersection": [[100, 100], [102, 102], [106, 106], [108, 108], [110, 110]],
     }
     return evidence, waybill_csv, receipt_csv, expected
+
+
+def build_recovery_sample():
+    """补档演示:把样例包中提交 102 的一笔删掉,并给出末次提交(110)后的全量快照。
+
+    提交 102 原本把 WB0002 从「已签收」改回「运输中」,142 之前 101 刚改为
+    「已签收」。缺号 102 的净变更由首尾快照推算为:WB0002 已签收 -> 运输中。
+    补档后该提交恰是两份 CSV 的共同吻合点,用来演示「快照推算」标记。
+
+    返回 (缺号证据包, 末快照, 期望的补齐后净变更数)。
+    """
+    evidence, _, _, _ = build_sample()
+    broken = json.loads(json.dumps(evidence))
+    broken["transactions"] = [t for t in broken["transactions"] if t["commit"] != 102]
+    end_snapshot = {"waybills": json.loads(json.dumps(WB_ROWS_0)),
+                    "receipts": json.loads(json.dumps(RC_ROWS_0))}
+    return broken, end_snapshot, 1

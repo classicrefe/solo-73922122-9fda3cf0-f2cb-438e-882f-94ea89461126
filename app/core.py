@@ -28,6 +28,10 @@ RC_VALUE_COLS = ("单号", "实收件数")
 
 MAX_CHANGES = 50000  # 支持至多 5 万条变更
 
+# 补档时按首尾快照推算出来的提交,在包内用该标记注明来源;核查页若把它列入
+# 吻合区间/交集,也要原样显示这个标记。
+MARKER = "快照推算"
+
 TABLE_ALIASES = {
     "waybills": WB_TABLE,
     "运单表": WB_TABLE,
@@ -80,6 +84,7 @@ class Change:
 class Transaction:
     commit: int
     changes: list
+    source: Optional[str] = None   # 非空即为补档推算的提交(如 "快照推算")
 
 
 @dataclass
@@ -146,7 +151,11 @@ def parse_evidence(data) -> Evidence:
         total += len(changes)
         if total > MAX_CHANGES:
             raise InputError(f"变更总数超过上限 {MAX_CHANGES} 条")
-        transactions.append(Transaction(commit=commit, changes=changes))
+        source = tx.get("source")
+        if source is not None and not isinstance(source, str):
+            raise InputError(f"transactions[{i}].source 必须是字符串")
+        source = (source or "").strip() or None
+        transactions.append(Transaction(commit=commit, changes=changes, source=source))
 
     return Evidence(start, end, wb_rows, rc_rows, transactions, total)
 
@@ -362,6 +371,9 @@ def verify(ev: Evidence, tgt_a: dict, tgt_b: dict) -> dict:
     eng = Engine(tgt_a, tgt_b)
     eng.load_snapshot(ev.wb_rows, ev.rc_rows)
 
+    # 补档推算的提交:提交号 -> 标记。起点快照本身不属于任何事务,不在此列。
+    marker_by_commit = {tx.commit: tx.source for tx in ev.transactions if tx.source}
+
     match_a, match_b = [], []
     if eng.mism_a == 0:
         match_a.append(ev.start_commit)
@@ -390,6 +402,7 @@ def verify(ev: Evidence, tgt_a: dict, tgt_b: dict) -> dict:
 
     iv_a = to_intervals(match_a)
     iv_b = to_intervals(match_b)
+    iv_c = intersect_intervals(iv_a, iv_b)
     return {
         "start_commit": ev.start_commit,
         "end_commit": ev.end_commit,
@@ -398,8 +411,28 @@ def verify(ev: Evidence, tgt_a: dict, tgt_b: dict) -> dict:
         "snapshot_rows": {"waybills": len(ev.wb_rows), "receipts": len(ev.rc_rows)},
         "waybill_csv": {"intervals": iv_a, "match_commits": len(match_a)},
         "receipt_csv": {"intervals": iv_b, "match_commits": len(match_b)},
-        "intersection": intersect_intervals(iv_a, iv_b),
+        "intersection": iv_c,
+        # 共同来源里若含补档推算的提交,列出标记供页面展示
+        "intersection_marked": _marked_points(iv_c, marker_by_commit),
+        "snapshot_derived_commits": [
+            {"commit": c, "source": marker_by_commit[c]}
+            for c in sorted(marker_by_commit)
+        ],
     }
+
+
+def _marked_points(intervals, marker_by_commit) -> list:
+    """标出交集区间内属于补档推算的提交(区间有序不重叠,用二分定位)。"""
+    if not marker_by_commit or not intervals:
+        return []
+    from bisect import bisect_right
+    los = [lo for lo, _ in intervals]
+    out = []
+    for commit in sorted(marker_by_commit):
+        i = bisect_right(los, commit) - 1
+        if i >= 0 and intervals[i][0] <= commit <= intervals[i][1]:
+            out.append({"commit": commit, "source": marker_by_commit[commit]})
+    return out
 
 
 # ---- CSV 读取 ----
